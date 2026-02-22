@@ -1,0 +1,434 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#0a0e17">
+<title>MeetingScribe — Secure IAM Tool</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔒</text></svg>">
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js"></script>
+<style>
+*{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html{height:100%}body{background:#0a0e17;font-family:'Sora',system-ui,sans-serif;color:#e0e6f0;min-height:100%;-webkit-text-size-adjust:100%}
+@keyframes pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.5;transform:scale(1.3)}}
+@keyframes fadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+@keyframes recording{0%,100%{box-shadow:0 0 0 0 #ff444466}50%{box-shadow:0 0 0 14px #ff444400}}
+::-webkit-scrollbar{width:6px}::-webkit-scrollbar-track{background:#0d1117}::-webkit-scrollbar-thumb{background:#2a3045;border-radius:3px}
+::selection{background:#c8f76040;color:#fff}
+input,textarea,select,button{font-size:16px!important}
+.progress-bar{height:6px;border-radius:3px;background:#1a2030;overflow:hidden;margin:8px 0}
+.progress-fill{height:100%;background:linear-gradient(90deg,#c8f760,#62d96b);border-radius:3px;transition:width .3s}
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<!-- WebLLM loaded as ES module -->
+<script type="module">
+import * as webllm from "https://esm.run/@mlc-ai/web-llm";
+window._webllm=webllm;
+window._webllmReady=true;
+console.log("[MeetingScribe] WebLLM loaded");
+</script>
+
+<script type="text/babel">
+const{useState,useEffect,useRef,useCallback}=React;
+
+/* ════════════ CONSTANTS ════════════ */
+const STORE_A="ms5-archives",STORE_R="ms5-ref";
+const uid=()=>Date.now().toString(36)+Math.random().toString(36).substr(2,9);
+const fmtDate=i=>new Date(i).toLocaleDateString("fr-FR",{weekday:"long",year:"numeric",month:"long",day:"numeric"});
+const fmtShort=i=>new Date(i).toLocaleDateString("fr-FR",{day:"numeric",month:"short",year:"numeric"});
+const fmtTime=i=>new Date(i).toLocaleTimeString("fr-FR",{hour:"2-digit",minute:"2-digit"});
+const fmtDur=s=>{const m=Math.floor(s/60),ss=s%60;return`${String(m).padStart(2,"0")}:${String(ss).padStart(2,"0")}`};
+const load=k=>{try{return JSON.parse(localStorage.getItem(k))}catch{return null}};
+const save=(k,v)=>{try{localStorage.setItem(k,JSON.stringify(v))}catch(e){console.error(e)}};
+
+const MODELS=[
+  {id:"Llama-3.2-1B-Instruct-q4f16_1-MLC",label:"Llama 3.2 1B",size:"~700 MB",quality:"⭐⭐",note:"Léger, rapide"},
+  {id:"Qwen2.5-1.5B-Instruct-q4f16_1-MLC",label:"Qwen 2.5 1.5B",size:"~1 GB",quality:"⭐⭐⭐",note:"Bon en français"},
+  {id:"Phi-3.5-mini-instruct-q4f16_1-MLC",label:"Phi 3.5 Mini",size:"~2.3 GB",quality:"⭐⭐⭐⭐",note:"Meilleure qualité"},
+  {id:"SmolLM2-1.7B-Instruct-q4f16_1-MLC",label:"SmolLM2 1.7B",size:"~1 GB",quality:"⭐⭐⭐",note:"Compact et efficace"},
+];
+const DEF_MODEL=MODELS[0].id;
+
+const DEF_REF=[
+  {id:uid(),name:"SailPoint",category:"IGA",responsable:""},{id:uid(),name:"CyberArk",category:"PAM",responsable:""},{id:uid(),name:"Okta",category:"SSO/MFA",responsable:""},{id:uid(),name:"Azure AD / Entra ID",category:"IdP",responsable:""},{id:uid(),name:"Active Directory",category:"Annuaire",responsable:""},{id:uid(),name:"ServiceNow",category:"ITSM",responsable:""},{id:uid(),name:"Saviynt",category:"IGA",responsable:""},{id:uid(),name:"ForgeRock",category:"CIAM",responsable:""},{id:uid(),name:"Ping Identity",category:"SSO",responsable:""},{id:uid(),name:"Keycloak",category:"IdP",responsable:""},{id:uid(),name:"HashiCorp Vault",category:"Secrets",responsable:""},{id:uid(),name:"AWS IAM",category:"Cloud IAM",responsable:""},
+];
+
+const CR_PROMPT=`Tu es un assistant spécialisé en gestion de projet IAM (Identity & Access Management). Génère un compte rendu de réunion professionnel et structuré à partir de cette transcription.
+
+{CONTEXT}
+
+TRANSCRIPTION:
+"""
+{TRANSCRIPT}
+"""
+
+Génère le compte rendu en français avec EXACTEMENT cette structure markdown:
+
+## Résumé Exécutif
+(2-3 phrases synthétiques)
+
+## Points Clés Abordés
+(liste à puces des sujets principaux)
+
+## Décisions Prises
+(liste des décisions, ou "Aucune décision formelle identifiée")
+
+## Actions à Mener
+| Action | Responsable | Échéance |
+|--------|-------------|----------|
+(actions identifiées ou "À définir")
+
+## Points d'Attention
+(risques, blocages, dépendances)
+
+Style: concis, professionnel, orienté IT/IAM.`;
+
+/* ════════════ WEBLLM ENGINE ════════════ */
+let _engine=null;let _currentModel=null;
+const hasWebGPU=()=>!!navigator.gpu;
+
+async function getWebLLM(){
+  return new Promise(res=>{
+    if(window._webllmReady)return res(window._webllm);
+    const t=setInterval(()=>{if(window._webllmReady){clearInterval(t);res(window._webllm)}},200);
+    setTimeout(()=>{clearInterval(t);res(null)},15000);
+  });
+}
+
+async function initEngine(modelId,onProgress){
+  const wl=await getWebLLM();
+  if(!wl)throw new Error("WebLLM non chargé. Rechargez la page.");
+  if(_engine&&_currentModel===modelId)return _engine;
+  if(_engine){try{await _engine.unload()}catch{}_engine=null}
+  _engine=await wl.CreateMLCEngine(modelId,{initProgressCallback:p=>{
+    if(onProgress)onProgress(p);
+  }});
+  _currentModel=modelId;
+  return _engine;
+}
+
+async function generateCR(transcript,refItems,modelId,onProgress){
+  const ctx=refItems.length>0?`Applications concernées: ${refItems.map(r=>`${r.name} (${r.category})${r.responsable?` — ${r.responsable}`:""}`).join(", ")}`:"";
+  const prompt=CR_PROMPT.replace("{CONTEXT}",ctx).replace("{TRANSCRIPT}",transcript);
+  try{
+    const engine=await initEngine(modelId,onProgress);
+    const reply=await engine.chat.completions.create({
+      messages:[{role:"user",content:prompt}],
+      temperature:0.3,max_tokens:2000,
+    });
+    return reply.choices[0]?.message?.content||"Erreur: réponse vide.";
+  }catch(err){
+    return`❌ Erreur IA: ${err.message}\n\n${!hasWebGPU()?"Votre navigateur ne supporte pas WebGPU.\nUtilisez Chrome 113+ ou Edge 113+.":"Essayez de recharger la page ou choisissez un modèle plus petit."}`;
+  }
+}
+
+/* ════════════ EXPORT ════════════ */
+function md2html(md){let h="";const lines=md.split("\n");let inT=false,tH="",isH=true;const fl=()=>{if(tH){h+=`<table border="1" cellpadding="8" cellspacing="0" style="border-collapse:collapse;width:100%;margin:12px 0;font-size:13px">${tH}</table>`;tH="";inT=false;isH=true}};for(const l of lines){if(l.startsWith("|")&&l.endsWith("|")){const c=l.split("|").filter((_,i,a)=>i>0&&i<a.length-1);if(c.every(x=>/^[\s\-:]+$/.test(x))){isH=false;continue}inT=true;const tg=isH?"th":"td",bg=isH?' style="background:#1a3a6b;color:white;font-weight:bold"':"";tH+=`<tr>${c.map(x=>`<${tg}${bg}>${x.trim()}</${tg}>`).join("")}</tr>`;continue}if(inT)fl();if(l.startsWith("## "))h+=`<h2 style="color:#2a5d9f;border-bottom:2px solid #2a5d9f;padding-bottom:4px;margin-top:20px;font-size:16px">${l.slice(3)}</h2>`;else if(/^[-*] /.test(l))h+=`<p style="margin:4px 0 4px 16px">● ${l.slice(2).replace(/\*\*(.*?)\*\*/g,"<b>$1</b>")}</p>`;else if(l.trim()==="")h+="<br/>";else h+=`<p style="margin:4px 0">${l.replace(/\*\*(.*?)\*\*/g,"<b>$1</b>")}</p>`}fl();return h}
+function buildDoc(a){return`<!DOCTYPE html><html><head><meta charset="utf-8"><style>body{font-family:Calibri,Arial,sans-serif;color:#222;max-width:800px;margin:0 auto;padding:24px;line-height:1.6}h1{color:#1a3a6b;font-size:20px}table{border-collapse:collapse;width:100%;margin:12px 0}th,td{border:1px solid #ccc;padding:8px;font-size:13px}th{background:#1a3a6b;color:white}.tag{background:#e8f0fe;color:#1a3a6b;padding:2px 10px;border-radius:4px;font-size:12px;font-weight:600;display:inline-block;margin:2px}</style></head><body><h1>${a.title}</h1><p style="color:#666;font-size:13px">${fmtDate(a.date)} · ${fmtTime(a.date)} · Durée: ${fmtDur(a.duration)}</p><div style="margin:8px 0 16px">${(a.referentiel||[]).map(r=>`<span class="tag">${r.name} — ${r.category}${r.responsable?` · 👤 ${r.responsable}`:""}</span>`).join(" ")}</div>${md2html(a.summary)}<hr style="margin-top:24px;border:none;border-top:1px solid #ddd"/><p style="font-size:11px;color:#999">MeetingScribe · Secure IAM Tool</p></body></html>`}
+function exportWord(a){const c=`<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word"><head><meta charset="utf-8"></head><body>${buildDoc(a).replace(/<!DOCTYPE.*?<body>/s,"").replace(/<\/body>.*$/s,"")}</body></html>`;const b=new Blob(["\ufeff",c],{type:"application/msword"});const u=URL.createObjectURL(b),el=document.createElement("a");el.href=u;el.download=`CR_${a.title.replace(/[^a-zA-Z0-9àâéèêëïîôùûç\s-]/g,"").replace(/\s+/g,"_").substring(0,40)}.doc`;document.body.appendChild(el);el.click();document.body.removeChild(el);URL.revokeObjectURL(u)}
+function exportPdf(a){const w=window.open("","_blank");if(!w){alert("Autorisez les popups.");return}w.document.write(buildDoc(a)+`<script>setTimeout(function(){window.print()},500)<\/script>`);w.document.close()}
+
+/* ════════════ MARKDOWN RENDERER ════════════ */
+function MdRender({text}){
+  const lines=(text||"").split("\n"),els=[];let inT=false,tR=[],isH=true;
+  const fl=()=>{if(tR.length){els.push(<div key={`t${els.length}`} style={{overflowX:"auto",margin:"12px 0",WebkitOverflowScrolling:"touch"}}><table style={{width:"100%",borderCollapse:"collapse",fontSize:13,fontFamily:"'JetBrains Mono',monospace",minWidth:340}}><tbody>{tR.map((row,ri)=><tr key={ri}>{row.c.map((c,ci)=>{const T=row.h?"th":"td";return<T key={ci} style={{padding:"8px 10px",borderBottom:"1px solid #1e2535",textAlign:"left",color:row.h?"#c8f760":"#c0c8d8",fontWeight:row.h?700:400,background:row.h?"#0d111a":"transparent"}}>{c.trim()}</T>})}</tr>)}</tbody></table></div>);tR=[];isH=true}};
+  for(let i=0;i<lines.length;i++){const l=lines[i];if(l.startsWith("|")&&l.endsWith("|")){const c=l.split("|").filter((_,j,a)=>j>0&&j<a.length-1);if(c.every(x=>/^[\s\-:]+$/.test(x))){isH=false;continue}inT=true;tR.push({c,h:isH});continue}if(inT){fl();inT=false}
+    if(l.startsWith("## "))els.push(<h3 key={i} style={{color:"#c8f760",fontSize:14,fontWeight:700,margin:"18px 0 8px",fontFamily:"'JetBrains Mono',monospace",borderBottom:"1px solid #1e2535",paddingBottom:6}}>{l.slice(3)}</h3>);
+    else if(/^[-*] /.test(l))els.push(<div key={i} style={{display:"flex",gap:8,marginLeft:4,marginBottom:4}}><span style={{color:"#c8f760",fontSize:10,marginTop:5,flexShrink:0}}>◆</span><span style={{color:"#c0c8d8",fontSize:13,lineHeight:1.6}} dangerouslySetInnerHTML={{__html:l.slice(2).replace(/\*\*(.*?)\*\*/g,'<strong style="color:#e0e8f4">$1</strong>')}} /></div>);
+    else if(l.trim()==="")els.push(<div key={i} style={{height:6}}/>);
+    else els.push(<p key={i} style={{color:"#c0c8d8",fontSize:13,lineHeight:1.7,margin:"4px 0"}} dangerouslySetInnerHTML={{__html:l.replace(/\*\*(.*?)\*\*/g,'<strong style="color:#e0e8f4">$1</strong>')}}/>);}
+  fl();return<div>{els}</div>;
+}
+
+/* ════════════ PRIVACY BADGE ════════════ */
+function PrivacyBadge({level,label}){
+  const colors={secure:"#62d96b",warning:"#ffb020",danger:"#ff6b6b"};
+  const icons={secure:"🔒",warning:"⚠️",danger:"❌"};
+  const c=colors[level]||colors.secure;
+  return<span style={{display:"inline-flex",alignItems:"center",gap:4,padding:"3px 10px",fontSize:11,fontFamily:"'JetBrains Mono',monospace",color:c,background:`${c}15`,border:`1px solid ${c}30`,borderRadius:6}}>{icons[level]} {label}</span>;
+}
+
+/* ════════════ REFERENTIEL PICKER ════════════ */
+function RefPicker({referentiel,selected,onChange,onAddItem,onClose,nn,setNn,nc,setNc,nr,setNr,qs,setQs,qc,setQc}){
+  const cats=[...new Set(referentiel.map(r=>r.category))].sort();
+  const filt=referentiel.filter(r=>{const ms=!qs||r.name.toLowerCase().includes(qs.toLowerCase())||r.category.toLowerCase().includes(qs.toLowerCase());return ms&&(!qc||r.category===qc)});
+  const isSel=id=>selected.some(s=>s.id===id);const tog=it=>isSel(it.id)?onChange(selected.filter(s=>s.id!==it.id)):onChange([...selected,it]);
+  const add=()=>{if(!nn.trim()||!nc.trim())return;const it={id:uid(),name:nn.trim(),category:nc.trim(),responsable:nr.trim()};onAddItem(it);onChange([...selected,it]);setNn("");setNc("");setNr("")};
+  return<div style={{position:"fixed",inset:0,zIndex:1000,display:"flex",alignItems:"flex-end",justifyContent:"center",background:"rgba(0,0,0,.7)"}} onClick={e=>{if(e.target===e.currentTarget)onClose()}}><div style={{background:"#111827",borderRadius:"16px 16px 0 0",width:"100%",maxWidth:640,maxHeight:"92vh",display:"flex",flexDirection:"column",overflow:"hidden",animation:"fadeIn .2s ease"}}>
+    <div style={{padding:"16px 20px 12px",borderBottom:"1px solid #1e2535"}}><div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}><h3 style={{margin:0,fontSize:16,fontWeight:700,color:"#f0f4fa"}}>📋 Référentiel</h3><button onClick={onClose} style={{background:"none",border:"none",color:"#5c6a82",fontSize:24,cursor:"pointer",padding:4}}>✕</button></div>
+      <div style={{display:"flex",gap:8}}><input value={qs} onChange={e=>setQs(e.target.value)} placeholder="🔍 Rechercher..." style={{flex:1,padding:"10px 12px",fontSize:16,color:"#e0e6f0",background:"#0d1117",border:"1px solid #1e2535",borderRadius:8,outline:"none"}}/><select value={qc} onChange={e=>setQc(e.target.value)} style={{padding:"10px 8px",fontSize:16,color:"#e0e6f0",background:"#0d1117",border:"1px solid #1e2535",borderRadius:8,maxWidth:130}}><option value="">Toutes</option>{cats.map(c=><option key={c} value={c}>{c}</option>)}</select></div></div>
+    <div style={{flex:1,overflowY:"auto",padding:"10px 16px",WebkitOverflowScrolling:"touch"}}><div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>{filt.map(it=>{const a=isSel(it.id);return<button key={it.id} onClick={()=>tog(it)} style={{display:"flex",flexDirection:"column",alignItems:"flex-start",padding:"12px",background:a?"#c8f76015":"#0d1117",border:`1.5px solid ${a?"#c8f76050":"#1e2535"}`,borderRadius:10,cursor:"pointer",textAlign:"left"}}><span style={{fontSize:13,fontWeight:600,color:a?"#c8f760":"#d0d8e8",fontFamily:"'JetBrains Mono',monospace"}}>{a?"✓ ":""}{it.name}</span><span style={{fontSize:11,color:"#5c6a82",marginTop:2}}>{it.category}</span>{it.responsable&&<span style={{fontSize:10,color:"#4a7a9a",marginTop:1}}>👤 {it.responsable}</span>}</button>})}</div></div>
+    <div style={{padding:"12px 16px",borderTop:"1px solid #1e2535",background:"#0d111a"}}><div style={{display:"flex",gap:6,flexWrap:"wrap"}}><input value={nn} onChange={e=>setNn(e.target.value)} placeholder="Nom" style={{flex:"1 1 90px",padding:"10px",fontSize:16,color:"#e0e6f0",background:"#111827",border:"1px solid #1e2535",borderRadius:8,outline:"none"}}/><input value={nc} onChange={e=>setNc(e.target.value)} placeholder="Catégorie" list="pcat" style={{flex:"1 1 80px",padding:"10px",fontSize:16,color:"#e0e6f0",background:"#111827",border:"1px solid #1e2535",borderRadius:8,outline:"none"}}/><input value={nr} onChange={e=>setNr(e.target.value)} placeholder="Resp." onKeyDown={e=>{if(e.key==="Enter")add()}} style={{flex:"1 1 70px",padding:"10px",fontSize:16,color:"#e0e6f0",background:"#111827",border:"1px solid #1e2535",borderRadius:8,outline:"none"}}/><datalist id="pcat">{cats.map(c=><option key={c} value={c}/>)}</datalist><button onClick={add} disabled={!nn.trim()||!nc.trim()} style={{padding:"10px 18px",fontWeight:700,color:"#0a0e17",background:nn.trim()&&nc.trim()?"linear-gradient(135deg,#c8f760,#a8e040)":"#1a2030",border:"none",borderRadius:8,minHeight:44}}>+</button></div></div>
+    <div style={{padding:"10px 16px",borderTop:"1px solid #1e2535",display:"flex",justifyContent:"space-between",alignItems:"center"}}><span style={{fontSize:12,color:"#5c6a82"}}>{selected.length} sélectionnée{selected.length!==1?"s":""}</span><button onClick={onClose} style={{padding:"10px 28px",fontWeight:600,color:"#0a0e17",background:"linear-gradient(135deg,#c8f760,#a8e040)",border:"none",borderRadius:8,minHeight:44}}>Valider</button></div>
+  </div></div>;
+}
+
+/* ════════════ REFERENTIEL ADMIN ════════════ */
+function RefAdmin({referentiel,setReferentiel,onClose,eId,setEId,en,setEn,ec,setEc,er,setEr,an,setAn,ac,setAc,ar,setAr}){
+  const cats=[...new Set(referentiel.map(r=>r.category))].sort();
+  const del=id=>setReferentiel(referentiel.filter(r=>r.id!==id));
+  const edit=it=>{setEId(it.id);setEn(it.name);setEc(it.category);setEr(it.responsable||"")};
+  const sv=()=>{setReferentiel(referentiel.map(r=>r.id===eId?{...r,name:en,category:ec,responsable:er}:r));setEId(null)};
+  const add=()=>{if(!an.trim()||!ac.trim())return;setReferentiel([...referentiel,{id:uid(),name:an.trim(),category:ac.trim(),responsable:ar.trim()}]);setAn("");setAc("");setAr("")};
+  const grp={};referentiel.forEach(r=>{if(!grp[r.category])grp[r.category]=[];grp[r.category].push(r)});
+  return<div style={{position:"fixed",inset:0,zIndex:1000,display:"flex",alignItems:"flex-end",justifyContent:"center",background:"rgba(0,0,0,.7)"}} onClick={e=>{if(e.target===e.currentTarget)onClose()}}><div style={{background:"#111827",borderRadius:"16px 16px 0 0",width:"100%",maxWidth:700,maxHeight:"92vh",display:"flex",flexDirection:"column",overflow:"hidden",animation:"fadeIn .2s ease"}}>
+    <div style={{padding:"16px 20px",borderBottom:"1px solid #1e2535",display:"flex",justifyContent:"space-between",alignItems:"center"}}><h3 style={{margin:0,fontSize:16,fontWeight:700}}>⚙️ Référentiel</h3><button onClick={onClose} style={{background:"none",border:"none",color:"#5c6a82",fontSize:24,cursor:"pointer",padding:4}}>✕</button></div>
+    <div style={{flex:1,overflowY:"auto",padding:"12px 16px",WebkitOverflowScrolling:"touch"}}>
+      {Object.entries(grp).sort(([a],[b])=>a.localeCompare(b)).map(([cat,items])=><div key={cat} style={{marginBottom:16}}><div style={{fontSize:11,fontWeight:700,color:"#c8f760",textTransform:"uppercase",letterSpacing:".1em",marginBottom:6,fontFamily:"'JetBrains Mono',monospace"}}>{cat} ({items.length})</div>
+        {items.map(it=><div key={it.id} style={{display:"flex",alignItems:"center",gap:6,padding:"10px 12px",background:"#0d1117",borderRadius:8,marginBottom:4,flexWrap:"wrap"}}>
+          {eId===it.id?<><input value={en} onChange={e=>setEn(e.target.value)} style={{flex:"1 1 90px",padding:"6px 10px",fontSize:16,color:"#e0e6f0",background:"#111827",border:"1px solid #2a3040",borderRadius:6,outline:"none"}}/><input value={ec} onChange={e=>setEc(e.target.value)} style={{flex:"0 1 80px",padding:"6px 10px",fontSize:16,color:"#e0e6f0",background:"#111827",border:"1px solid #2a3040",borderRadius:6,outline:"none"}}/><input value={er} onChange={e=>setEr(e.target.value)} placeholder="Resp." style={{flex:"0 1 80px",padding:"6px 10px",fontSize:16,color:"#e0e6f0",background:"#111827",border:"1px solid #2a3040",borderRadius:6,outline:"none"}}/><button onClick={sv} style={{background:"none",border:"none",color:"#62d96b",fontSize:22,padding:4}}>✓</button><button onClick={()=>setEId(null)} style={{background:"none",border:"none",color:"#5c6a82",fontSize:22,padding:4}}>✕</button></>
+          :<><span style={{flex:1,fontSize:13,color:"#d0d8e8",fontFamily:"'JetBrains Mono',monospace"}}>{it.name}</span>{it.responsable&&<span style={{fontSize:11,color:"#4a7a9a"}}>👤 {it.responsable}</span>}<button onClick={()=>edit(it)} style={{background:"none",border:"none",color:"#5c6a82",fontSize:18,padding:6}}>✏️</button><button onClick={()=>del(it.id)} style={{background:"none",border:"none",color:"#ff6b6b",fontSize:18,padding:6}}>🗑️</button></>}
+        </div>)}</div>)}<datalist id="acat">{cats.map(c=><option key={c} value={c}/>)}</datalist></div>
+    <div style={{padding:"12px 16px",borderTop:"1px solid #1e2535",background:"#0d111a"}}><div style={{display:"flex",gap:6,flexWrap:"wrap"}}><input value={an} onChange={e=>setAn(e.target.value)} placeholder="Nom" style={{flex:"1 1 90px",padding:"10px",fontSize:16,color:"#e0e6f0",background:"#111827",border:"1px solid #1e2535",borderRadius:8,outline:"none"}}/><input value={ac} onChange={e=>setAc(e.target.value)} placeholder="Catégorie" list="acat" style={{flex:"1 1 80px",padding:"10px",fontSize:16,color:"#e0e6f0",background:"#111827",border:"1px solid #1e2535",borderRadius:8,outline:"none"}}/><input value={ar} onChange={e=>setAr(e.target.value)} placeholder="Resp." onKeyDown={e=>{if(e.key==="Enter")add()}} style={{flex:"1 1 70px",padding:"10px",fontSize:16,color:"#e0e6f0",background:"#111827",border:"1px solid #1e2535",borderRadius:8,outline:"none"}}/><button onClick={add} disabled={!an.trim()||!ac.trim()} style={{padding:"10px 18px",fontWeight:700,color:"#0a0e17",background:an.trim()&&ac.trim()?"linear-gradient(135deg,#c8f760,#a8e040)":"#1a2030",border:"none",borderRadius:8,minHeight:44}}>+</button></div></div>
+  </div></div>;
+}
+
+/* ════════════════════════════════════════════════
+   MAIN APP
+   ════════════════════════════════════════════════ */
+function App(){
+  /* ── Views ── */
+  const[view,setView]=useState("home");const[selArchive,setSelArchive]=useState(null);const[showT,setShowT]=useState(false);
+  /* ── Data ── */
+  const[archives,setArchives]=useState([]);const[referentiel,setReferentiel]=useState([]);
+  /* ── Recording ── */
+  const[isRec,setIsRec]=useState(false);const[isPaused,setIsPaused]=useState(false);const[dur,setDur]=useState(0);
+  const[title,setTitle]=useState("");const[selRef,setSelRef]=useState([]);const[transcript,setTranscript]=useState("");
+  const[summary,setSummary]=useState("");const[isGen,setIsGen]=useState(false);const[saved,setSaved]=useState(false);
+  const[genProgress,setGenProgress]=useState("");const[genPct,setGenPct]=useState(0);
+  /* ── Transcription mode ── */
+  const[txMode,setTxMode]=useState("manual"); // "manual" | "speech"
+  /* ── Audio recording ── */
+  const[audioUrl,setAudioUrl]=useState(null);
+  /* ── AI ── */
+  const[modelId,setModelId]=useState(DEF_MODEL);const[modelLoaded,setModelLoaded]=useState(false);const[webGPU,setWebGPU]=useState(null);
+  /* ── Modals ── */
+  const[showPicker,setShowPicker]=useState(false);const[showAdmin,setShowAdmin]=useState(false);const[showSettings,setShowSettings]=useState(false);
+  /* ── Picker state (lifted) ── */
+  const[pnn,setPnn]=useState("");const[pnc,setPnc]=useState("");const[pnr,setPnr]=useState("");const[pqs,setPqs]=useState("");const[pqc,setPqc]=useState("");
+  /* ── Admin state (lifted) ── */
+  const[aEId,setAEId]=useState(null);const[aEn,setAEn]=useState("");const[aEc,setAEc]=useState("");const[aEr,setAEr]=useState("");const[aAn,setAAn]=useState("");const[aAc,setAAc]=useState("");const[aAr,setAAr]=useState("");
+  /* ── Search ── */
+  const[searchQ,setSearchQ]=useState("");const[filterRef,setFilterRef]=useState("");
+
+  const recRef=useRef(null);const timerRef=useRef(null);const txRef=useRef("");
+  const mediaRecRef=useRef(null);const chunksRef=useRef([]);
+
+  /* ── Init ── */
+  useEffect(()=>{
+    setArchives(load(STORE_A)||[]);setReferentiel(load(STORE_R)||DEF_REF);
+    setModelId(localStorage.getItem("ms5-model")||DEF_MODEL);
+    setWebGPU(hasWebGPU());
+  },[]);
+  useEffect(()=>{if(referentiel.length>0)save(STORE_R,referentiel)},[referentiel]);
+
+  /* ── Speech Recognition ── */
+  const startSpeech=useCallback(()=>{
+    const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+    if(!SR)return false;
+    const r=new SR();r.continuous=true;r.interimResults=true;r.lang="fr-FR";
+    r.onresult=e=>{let f="";for(let i=e.resultIndex;i<e.results.length;i++)if(e.results[i].isFinal)f+=e.results[i][0].transcript+" ";if(f){txRef.current+=f;setTranscript(txRef.current)}};
+    r.onerror=()=>{};r.onend=()=>{if(recRef.current)try{recRef.current.start()}catch{}};
+    recRef.current=r;r.start();return true;
+  },[]);
+
+  /* ── Audio Recording (local) ── */
+  const startAudioRec=async()=>{
+    try{const stream=await navigator.mediaDevices.getUserMedia({audio:true});
+    const mr=new MediaRecorder(stream);chunksRef.current=[];
+    mr.ondataavailable=e=>chunksRef.current.push(e.data);
+    mr.onstop=()=>{const blob=new Blob(chunksRef.current,{type:"audio/webm"});setAudioUrl(URL.createObjectURL(blob));stream.getTracks().forEach(t=>t.stop())};
+    mediaRecRef.current=mr;mr.start();return true}catch{return false}
+  };
+
+  const doStart=async()=>{
+    txRef.current="";setTranscript("");setDur(0);setSummary("");setSaved(false);setAudioUrl(null);setGenProgress("");setGenPct(0);
+    const audioOk=await startAudioRec();
+    if(txMode==="speech")startSpeech();
+    if(!audioOk&&txMode==="manual"){alert("Impossible d'accéder au micro.");return}
+    setIsRec(true);setIsPaused(false);timerRef.current=setInterval(()=>setDur(d=>d+1),1000);
+  };
+  const doPause=()=>{
+    if(isPaused){
+      if(mediaRecRef.current?.state==="paused")mediaRecRef.current.resume();
+      if(txMode==="speech")try{recRef.current?.start()}catch{}
+      timerRef.current=setInterval(()=>setDur(d=>d+1),1000);setIsPaused(false);
+    }else{
+      if(mediaRecRef.current?.state==="recording")mediaRecRef.current.pause();
+      if(txMode==="speech")try{recRef.current?.stop()}catch{}
+      clearInterval(timerRef.current);setIsPaused(true);
+    }
+  };
+  const doStop=()=>{
+    if(txMode==="speech")try{recRef.current?.stop()}catch{}recRef.current=null;
+    if(mediaRecRef.current?.state!=="inactive")try{mediaRecRef.current?.stop()}catch{}
+    clearInterval(timerRef.current);setIsRec(false);setIsPaused(false);
+  };
+
+  const doGen=async()=>{
+    if(!transcript.trim()||isGen)return;
+    if(!webGPU){setGenProgress("❌ WebGPU non supporté. Utilisez Chrome 113+.");return}
+    setIsGen(true);setGenProgress("Chargement du modèle...");setGenPct(0);
+    const r=await generateCR(transcript,selRef,modelId,p=>{
+      setGenProgress(p.text||"Chargement...");
+      if(p.progress!==undefined)setGenPct(Math.round(p.progress*100));
+    });
+    setSummary(r);setIsGen(false);setGenProgress("");
+  };
+  const doSave=()=>{const e={id:uid(),title:title||`Réunion ${fmtShort(new Date().toISOString())}`,date:new Date().toISOString(),duration:dur,referentiel:selRef,transcript,summary,audioUrl};const u=[e,...archives];setArchives(u);save(STORE_A,u);setSaved(true);setTimeout(()=>setSaved(false),3000)};
+  const doDel=id=>{const u=archives.filter(a=>a.id!==id);setArchives(u);save(STORE_A,u);if(selArchive?.id===id){setSelArchive(null);setView("archives")}};
+  const addRI=it=>{if(!referentiel.some(r=>r.id===it.id))setReferentiel([...referentiel,it])};
+  const allRN=[...new Set(archives.flatMap(a=>(a.referentiel||[]).map(r=>r.name)))];
+  const fA=archives.filter(a=>{const ms=!searchQ||a.title.toLowerCase().includes(searchQ.toLowerCase());return ms&&(!filterRef||(a.referentiel||[]).some(r=>r.name===filterRef))});
+
+  /* ── Styles ── */
+  const S={
+    main:{maxWidth:960,margin:"0 auto",padding:"20px 16px 80px"},
+    card:{background:"#111827",border:"1px solid #1e2535",borderRadius:12,padding:"20px 16px",marginBottom:14,animation:"fadeIn .3s ease"},
+    bp:{padding:"12px 24px",fontWeight:600,color:"#0a0e17",background:"linear-gradient(135deg,#c8f760,#a8e040)",border:"none",borderRadius:10,cursor:"pointer",fontFamily:"inherit",minHeight:48},
+    bs:{padding:"10px 18px",fontWeight:500,color:"#c0c8d8",background:"#1a2030",border:"1px solid #2a3045",borderRadius:10,cursor:"pointer",fontFamily:"inherit",minHeight:44},
+    bd:{padding:"10px 16px",fontWeight:500,color:"#ff6b6b",background:"#ff6b6b12",border:"1px solid #ff6b6b30",borderRadius:8,cursor:"pointer",fontFamily:"inherit",minHeight:44},
+    inp:{width:"100%",padding:"12px 14px",fontSize:16,color:"#e0e6f0",background:"#0d1117",border:"1px solid #1e2535",borderRadius:10,outline:"none",fontFamily:"inherit",boxSizing:"border-box"},
+    lbl:{display:"block",fontSize:11,fontWeight:600,color:"#5c6a82",textTransform:"uppercase",letterSpacing:".08em",marginBottom:8,fontFamily:"'JetBrains Mono',monospace"},
+    badge:c=>({display:"inline-block",padding:"3px 10px",fontSize:11,fontFamily:"'JetBrains Mono',monospace",color:c||"#c8f760",background:`${c||"#c8f760"}18`,border:`1px solid ${c||"#c8f760"}30`,borderRadius:6}),
+    nb:a=>({padding:"10px 14px",fontSize:14,fontWeight:a?600:400,color:a?"#c8f760":"#7a8698",background:a?"#c8f76012":"transparent",border:"none",borderRadius:8,cursor:"pointer",fontFamily:"inherit",minHeight:44}),
+  };
+
+  /* ── Settings Modal ── */
+  const settingsM=()=><div style={{position:"fixed",inset:0,zIndex:1100,display:"flex",alignItems:"flex-end",justifyContent:"center",background:"rgba(0,0,0,.7)"}} onClick={e=>{if(e.target===e.currentTarget)setShowSettings(false)}}>
+    <div style={{background:"#111827",borderRadius:"16px 16px 0 0",padding:"24px 20px",width:"100%",maxWidth:520,maxHeight:"92vh",overflowY:"auto",animation:"fadeIn .2s ease",WebkitOverflowScrolling:"touch"}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}><h3 style={{fontSize:17,fontWeight:700}}>⚙️ Paramètres IA</h3><button onClick={()=>setShowSettings(false)} style={{background:"none",border:"none",color:"#5c6a82",fontSize:24,cursor:"pointer",padding:4}}>✕</button></div>
+
+      {/* WebGPU Status */}
+      <div style={{display:"flex",alignItems:"center",gap:10,padding:"14px 16px",background:webGPU?"#62d96b12":"#ff6b6b12",border:`1px solid ${webGPU?"#62d96b30":"#ff6b6b30"}`,borderRadius:10,marginBottom:16}}>
+        <span style={{fontSize:22}}>{webGPU===null?"⏳":webGPU?"🟢":"🔴"}</span>
+        <div style={{flex:1}}><div style={{fontSize:14,fontWeight:600,color:webGPU?"#62d96b":"#ff6b6b"}}>{webGPU?"WebGPU disponible":"WebGPU non détecté"}</div><div style={{fontSize:11,color:"#5c6a82"}}>{webGPU?"L'IA tourne dans votre navigateur":"Utilisez Chrome 113+ ou Edge 113+"}</div></div>
+      </div>
+
+      <div style={{padding:"14px 16px",background:"#0d111a",borderRadius:10,marginBottom:16}}>
+        <div style={{display:"flex",gap:6,marginBottom:8,flexWrap:"wrap"}}><PrivacyBadge level="secure" label="IA locale"/><PrivacyBadge level="secure" label="Stockage local"/><PrivacyBadge level="secure" label="Aucun serveur"/></div>
+        <p style={{fontSize:12,color:"#6a7a92",lineHeight:1.6,margin:0}}>Le modèle est téléchargé une seule fois puis mis en cache dans votre navigateur. Aucune donnée n'est envoyée à un serveur.</p>
+      </div>
+
+      {/* Model Selection */}
+      <div style={{marginBottom:16}}><label style={S.lbl}>Modèle IA</label>
+        {MODELS.map(m=><button key={m.id} onClick={()=>{setModelId(m.id);localStorage.setItem("ms5-model",m.id)}} style={{display:"flex",alignItems:"center",gap:12,width:"100%",padding:"12px 14px",background:modelId===m.id?"#c8f76012":"#0d1117",border:`1.5px solid ${modelId===m.id?"#c8f76050":"#1e2535"}`,borderRadius:10,cursor:"pointer",textAlign:"left",marginBottom:6}}>
+          <div style={{flex:1}}><div style={{fontSize:14,fontWeight:600,color:modelId===m.id?"#c8f760":"#d0d8e8"}}>{m.label}</div><div style={{fontSize:11,color:"#5c6a82",marginTop:2}}>{m.note} · {m.size}</div></div>
+          <div style={{fontSize:12,color:"#5c6a82"}}>{m.quality}</div>
+          {modelId===m.id&&<span style={{color:"#c8f760",fontSize:16}}>✓</span>}
+        </button>)}
+      </div>
+
+      <div style={{display:"flex",gap:10}}><button onClick={()=>setShowSettings(false)} style={{...S.bs,flex:1}}>Fermer</button></div>
+    </div>
+  </div>;
+
+  /* ════════════ HOME ════════════ */
+  const Home=()=><div style={S.main}>
+    <div style={{textAlign:"center",padding:"28px 0 20px"}}><div style={{fontSize:40,marginBottom:10}}>🔒</div><h1 style={{fontSize:24,fontWeight:800,color:"#f0f4fa",margin:"0 0 8px"}}>Meeting<span style={{color:"#c8f760"}}>Scribe</span></h1>
+      <p style={{fontSize:14,color:"#6a7a92",maxWidth:420,margin:"0 auto 8px",lineHeight:1.6}}>Transcrivez et synthétisez vos réunions IAM.<br/>100% local, 100% privé.</p>
+      <div style={{display:"flex",gap:6,justifyContent:"center",flexWrap:"wrap",marginBottom:20}}><PrivacyBadge level="secure" label="Données locales"/><PrivacyBadge level="secure" label="IA dans le navigateur"/><PrivacyBadge level="secure" label="Aucun serveur"/></div>
+      <div style={{display:"flex",gap:10,justifyContent:"center",flexWrap:"wrap"}}><button onClick={()=>{setTitle("");setSelRef([]);setTranscript("");setSummary("");setDur(0);setSaved(false);setAudioUrl(null);setView("record")}} style={S.bp}>● Nouvelle réunion</button><button onClick={()=>setView("archives")} style={S.bs}>📂 Archives ({archives.length})</button></div>
+      <div style={{display:"flex",gap:8,justifyContent:"center",marginTop:10}}><button onClick={()=>setShowAdmin(true)} style={{...S.bs,padding:"8px 14px"}}>⚙️ Réf.</button><button onClick={()=>setShowSettings(true)} style={{...S.bs,padding:"8px 14px"}}>{webGPU?"🟢":"🔴"} IA</button></div>
+    </div>
+
+    {!webGPU&&webGPU!==null&&<div style={{...S.card,borderColor:"#ff6b6b30",padding:16}}><div style={{display:"flex",gap:10,alignItems:"center"}}><span style={{fontSize:24}}>⚠️</span><div><div style={{fontSize:14,fontWeight:600,color:"#ff6b6b"}}>WebGPU non disponible</div><div style={{fontSize:12,color:"#6a7a92",marginTop:4}}>Votre navigateur ne supporte pas WebGPU. L'IA ne fonctionnera pas. Utilisez <strong style={{color:"#e0e8f4"}}>Chrome 113+</strong> ou <strong style={{color:"#e0e8f4"}}>Edge 113+</strong>.</div></div></div></div>}
+
+    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))",gap:10,marginTop:16}}>
+      {[{i:"🔒",t:"100% Privé",d:"Aucune donnée ne quitte votre appareil"},{i:"🧠",t:"IA Embarquée",d:"WebLLM tourne dans votre navigateur"},{i:"📋",t:"Référentiel",d:"Classez par application IAM"},{i:"📥",t:"Export",d:"Word & PDF"}].map((f,i)=><div key={i} style={{...S.card,padding:14,textAlign:"center"}}><div style={{fontSize:20,marginBottom:6}}>{f.i}</div><h3 style={{fontSize:12,fontWeight:700,color:"#e0e8f4",marginBottom:4}}>{f.t}</h3><p style={{fontSize:11,color:"#6a7a92",lineHeight:1.4,margin:0}}>{f.d}</p></div>)}
+    </div>
+
+    {archives.length>0&&<div style={{marginTop:20}}><div style={{fontSize:12,fontWeight:700,color:"#8892a8",marginBottom:10,fontFamily:"'JetBrains Mono',monospace"}}>RÉCENTES</div>
+      {archives.slice(0,3).map(a=><div key={a.id} onClick={()=>{setSelArchive(a);setShowT(false);setView("detail")}} style={{...S.card,padding:14,cursor:"pointer"}}><div style={{fontSize:14,fontWeight:600,color:"#e0e8f4",marginBottom:3}}>{a.title}</div><div style={{fontSize:12,color:"#5c6a82",marginBottom:4}}>{fmtShort(a.date)} · {fmtDur(a.duration)}</div><div style={{display:"flex",gap:4,flexWrap:"wrap"}}>{(a.referentiel||[]).slice(0,3).map((t,i)=><span key={i} style={S.badge()}>{t.name}</span>)}</div></div>)}
+    </div>}
+  </div>;
+
+  /* ════════════ RECORD ════════════ */
+  const Record=()=><div style={S.main}><div style={S.card}>
+    <div style={{marginBottom:14}}><label style={S.lbl}>Titre</label><input value={title} onChange={e=>setTitle(e.target.value)} placeholder="Ex: Comité IAM - Migration SailPoint" style={S.inp}/></div>
+    <div style={{marginBottom:14}}><label style={S.lbl}>Applications</label><button onClick={()=>{setPqs("");setPqc("");setShowPicker(true)}} style={{...S.bs,width:"100%",textAlign:"left",marginBottom:6}}>📋 Sélectionner ({selRef.length})</button>{selRef.length>0&&<div style={{display:"flex",gap:6,flexWrap:"wrap"}}>{selRef.map(r=><span key={r.id} style={{display:"inline-flex",alignItems:"center",gap:4,padding:"5px 10px",fontSize:12,fontFamily:"'JetBrains Mono',monospace",color:"#c8f760",background:"#c8f76015",border:"1px solid #c8f76040",borderRadius:8}}>{r.name}<button onClick={()=>setSelRef(selRef.filter(s=>s.id!==r.id))} style={{background:"none",border:"none",color:"#5c6a82",cursor:"pointer",fontSize:18,padding:0}}>×</button></span>)}</div>}</div>
+
+    {/* Transcription Mode */}
+    <div style={{marginBottom:14}}><label style={S.lbl}>Mode de transcription</label>
+      <div style={{display:"flex",gap:8}}>
+        <button onClick={()=>setTxMode("manual")} style={{flex:1,padding:"10px",borderRadius:8,border:`1.5px solid ${txMode==="manual"?"#62d96b50":"#1e2535"}`,background:txMode==="manual"?"#62d96b10":"#0d1117",cursor:"pointer",textAlign:"center"}}><div style={{fontSize:14,fontWeight:600,color:txMode==="manual"?"#62d96b":"#8892a8"}}>✍️ Manuel</div><div style={{fontSize:10,color:"#5c6a82",marginTop:2}}>🔒 100% privé</div></button>
+        <button onClick={()=>setTxMode("speech")} style={{flex:1,padding:"10px",borderRadius:8,border:`1.5px solid ${txMode==="speech"?"#ffb02050":"#1e2535"}`,background:txMode==="speech"?"#ffb02010":"#0d1117",cursor:"pointer",textAlign:"center"}}><div style={{fontSize:14,fontWeight:600,color:txMode==="speech"?"#ffb020":"#8892a8"}}>🎤 Vocal</div><div style={{fontSize:10,color:"#5c6a82",marginTop:2}}>⚠️ via Google</div></button>
+      </div>
+      {txMode==="speech"&&<div style={{padding:"8px 12px",background:"#ffb02012",border:"1px solid #ffb02030",borderRadius:8,marginTop:8}}><p style={{fontSize:11,color:"#ffb020",lineHeight:1.5,margin:0}}>⚠️ Web Speech API envoie l'audio aux serveurs Google pour transcription. Si la confidentialité est critique, utilisez le mode Manuel + enregistrement audio local.</p></div>}
+    </div>
+
+    {/* Recorder */}
+    <div style={{padding:"16px 0",borderTop:"1px solid #1e2535",borderBottom:"1px solid #1e2535",marginBottom:14,textAlign:"center"}}>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"center",gap:10,marginBottom:14}}>
+        {isRec&&!isPaused&&<div style={{width:14,height:14,borderRadius:"50%",background:"#ff4444",animation:"pulse 1.2s infinite"}}/>}
+        <span style={{fontFamily:"'JetBrains Mono',monospace",fontSize:32,color:isRec?"#ff6b6b":"#3a4560",fontWeight:700}}>{fmtDur(dur)}</span>
+      </div>
+      <div style={{display:"flex",gap:10,justifyContent:"center"}}>
+        {!isRec?<button onClick={doStart} style={{...S.bp,flex:"0 1 260px"}}>● Enregistrer</button>
+        :<><button onClick={doPause} style={{...S.bs,flex:1}}>{isPaused?"▶ Reprendre":"⏸ Pause"}</button><button onClick={doStop} style={{...S.bd,flex:1}}>■ Stop</button></>}
+      </div>
+      <div style={{display:"flex",gap:6,justifyContent:"center",marginTop:10}}>
+        {isRec&&<PrivacyBadge level="secure" label="Audio local"/>}
+        {isRec&&txMode==="speech"&&<PrivacyBadge level="warning" label="Transcription Google"/>}
+        {isRec&&txMode==="manual"&&<PrivacyBadge level="secure" label="Transcription manuelle"/>}
+      </div>
+    </div>
+
+    {audioUrl&&!isRec&&<div style={{marginBottom:14}}><label style={S.lbl}>🎧 Enregistrement audio (local)</label><audio src={audioUrl} controls style={{width:"100%",borderRadius:8}}/></div>}
+
+    <div style={{marginBottom:14}}><label style={S.lbl}>Transcription {isRec&&txMode==="speech"?"(en cours...)":""}</label><textarea value={transcript} onChange={e=>{setTranscript(e.target.value);txRef.current=e.target.value}} placeholder={txMode==="speech"&&isRec?"Parlez, la transcription apparaîtra ici...":"Tapez ou collez la transcription ici..."} style={{...S.inp,minHeight:130,resize:"vertical",lineHeight:1.7,fontFamily:"'JetBrains Mono',monospace"}}/><div style={{fontSize:11,color:"#3a4560",marginTop:4}}>{transcript.split(/\s+/).filter(Boolean).length} mots</div></div>
+
+    <div style={{display:"flex",gap:8,flexWrap:"wrap"}}><button onClick={doGen} disabled={!transcript.trim()||isGen} style={{...S.bp,flex:"1 1 auto",opacity:!transcript.trim()||isGen?.4:1}}>{isGen?"⏳ Génération...":"🧠 Générer le CR"}</button></div>
+
+    {/* Generation Progress */}
+    {isGen&&<div style={{marginTop:12,padding:"12px 14px",background:"#0d111a",borderRadius:10}}>
+      <div style={{fontSize:12,color:"#8892a8",marginBottom:4,fontFamily:"'JetBrains Mono',monospace"}}>{genProgress}</div>
+      {genPct>0&&genPct<100&&<div className="progress-bar"><div className="progress-fill" style={{width:`${genPct}%`}}/></div>}
+    </div>}
+
+    {summary&&<div style={{display:"flex",gap:8,flexWrap:"wrap",marginTop:10}}><button onClick={doSave} style={S.bs}>💾 Archiver</button><button onClick={()=>exportWord({title:title||"Réunion",date:new Date().toISOString(),duration:dur,referentiel:selRef,summary})} style={S.bs}>📄 Word</button><button onClick={()=>exportPdf({title:title||"Réunion",date:new Date().toISOString(),duration:dur,referentiel:selRef,summary})} style={S.bs}>📕 PDF</button>{saved&&<span style={{display:"flex",alignItems:"center",color:"#62d96b",fontSize:14,fontWeight:600}}>✓ Archivé</span>}</div>}
+  </div>
+  {summary&&<div style={{...S.card,borderColor:"#c8f76030"}}><div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}><span style={{fontSize:13,fontWeight:700,color:"#c8f760",fontFamily:"'JetBrains Mono',monospace"}}>COMPTE RENDU</span><button onClick={()=>navigator.clipboard?.writeText(summary)} style={{...S.bs,padding:"6px 14px",minHeight:36}}>📋 Copier</button></div><MdRender text={summary}/></div>}
+  </div>;
+
+  /* ════════════ ARCHIVES ════════════ */
+  const Archives=()=><div style={S.main}><h2 style={{fontSize:18,fontWeight:800,color:"#f0f4fa",marginBottom:14}}>📂 Archives</h2>
+    <div style={{...S.card,padding:14}}><input value={searchQ} onChange={e=>setSearchQ(e.target.value)} placeholder="🔍 Rechercher..." style={{...S.inp,marginBottom:8}}/><div style={{display:"flex",gap:8,alignItems:"center"}}><select value={filterRef} onChange={e=>setFilterRef(e.target.value)} style={{...S.inp,flex:1}}><option value="">Toutes apps</option>{allRN.map(t=><option key={t} value={t}>{t}</option>)}</select><span style={{fontSize:12,color:"#5c6a82"}}>{fA.length}</span></div></div>
+    {fA.length===0?<div style={{textAlign:"center",padding:"28px 0",color:"#3a4560"}}><div style={{fontSize:32}}>📭</div><p style={{marginTop:8}}>Aucune réunion.</p></div>
+    :fA.map(a=><div key={a.id} style={{...S.card,padding:14,cursor:"pointer"}} onClick={()=>{setSelArchive(a);setShowT(false);setView("detail")}}><div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}><div style={{flex:1,minWidth:0}}><div style={{fontSize:14,fontWeight:700,color:"#e0e8f4",marginBottom:3,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{a.title}</div><div style={{fontSize:12,color:"#5c6a82",marginBottom:4}}>{fmtShort(a.date)} · {fmtDur(a.duration)}</div><div style={{display:"flex",gap:4,flexWrap:"wrap"}}>{(a.referentiel||[]).map((t,i)=><span key={i} style={S.badge()}>{t.name}</span>)}</div></div><button onClick={e=>{e.stopPropagation();doDel(a.id)}} style={{...S.bd,padding:"8px 12px",marginLeft:8}}>🗑</button></div></div>)}
+  </div>;
+
+  /* ════════════ DETAIL ════════════ */
+  const Detail=()=>{if(!selArchive)return null;const a=selArchive;return<div style={S.main}>
+    <button onClick={()=>setView("archives")} style={{...S.bs,marginBottom:14,padding:"8px 16px"}}>← Retour</button>
+    <div style={S.card}><h2 style={{fontSize:17,fontWeight:800,color:"#f0f4fa",margin:"0 0 4px"}}>{a.title}</h2><div style={{fontSize:12,color:"#5c6a82",marginBottom:10,fontFamily:"'JetBrains Mono',monospace"}}>{fmtDate(a.date)} · {fmtTime(a.date)} · {fmtDur(a.duration)}</div>
+      <div style={{display:"flex",gap:4,flexWrap:"wrap",marginBottom:14}}>{(a.referentiel||[]).map((t,i)=><span key={i} style={{...S.badge(),padding:"4px 10px"}}>{t.name} · {t.category}{t.responsable?` · 👤 ${t.responsable}`:""}</span>)}</div>
+      <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:14}}><button onClick={()=>navigator.clipboard?.writeText(a.summary)} style={S.bs}>📋</button><button onClick={()=>exportWord(a)} style={S.bs}>📄 Word</button><button onClick={()=>exportPdf(a)} style={S.bs}>📕 PDF</button><button onClick={()=>setShowT(!showT)} style={S.bs}>{showT?"🔼":"📝"} Transcription</button></div>
+      {showT&&<div style={{background:"#0a0e17",border:"1px solid #1e2535",borderRadius:10,padding:14,marginBottom:14,maxHeight:200,overflowY:"auto",WebkitOverflowScrolling:"touch"}}><p style={{fontSize:13,color:"#8892a8",lineHeight:1.7,fontFamily:"'JetBrains Mono',monospace",whiteSpace:"pre-wrap",margin:0}}>{a.transcript}</p></div>}
+      <div style={{borderTop:"1px solid #1e2535",paddingTop:14}}><div style={{fontSize:12,fontWeight:700,color:"#c8f760",marginBottom:10,fontFamily:"'JetBrains Mono',monospace"}}>COMPTE RENDU</div><MdRender text={a.summary}/></div>
+    </div>
+  </div>};
+
+  /* ════════════ RENDER ════════════ */
+  return<div style={{minHeight:"100vh",background:"#0a0e17"}}>
+    <header style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"12px 16px",borderBottom:"1px solid #141a28",background:"#0d1120",position:"sticky",top:0,zIndex:900}}>
+      <div style={{display:"flex",alignItems:"center",gap:10,cursor:"pointer"}} onClick={()=>setView("home")}><div style={{width:32,height:32,borderRadius:8,background:"linear-gradient(135deg,#c8f760,#62d96b)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:14,color:"#0a0e17",fontWeight:800}}>🔒</div><span style={{fontSize:15,fontWeight:700,color:"#e8edf5"}}>MeetingScribe</span></div>
+      <nav style={{display:"flex",gap:2}}><button style={S.nb(view==="record")} onClick={()=>{if(!isRec){setTranscript("");setSummary("");setDur(0);setTitle("");setSelRef([]);setSaved(false);setAudioUrl(null)}setView("record")}}>🎙️</button><button style={S.nb(view==="archives")} onClick={()=>setView("archives")}>📂</button><button style={S.nb(false)} onClick={()=>setShowAdmin(true)}>⚙️</button><button style={S.nb(false)} onClick={()=>setShowSettings(true)}>{webGPU?"🧠":"🔴"}</button></nav>
+    </header>
+    {view==="home"&&Home()}{view==="record"&&Record()}{view==="archives"&&Archives()}{view==="detail"&&Detail()}
+    {showPicker&&<RefPicker referentiel={referentiel} selected={selRef} onChange={setSelRef} onAddItem={addRI} onClose={()=>setShowPicker(false)} nn={pnn} setNn={setPnn} nc={pnc} setNc={setPnc} nr={pnr} setNr={setPnr} qs={pqs} setQs={setPqs} qc={pqc} setQc={setPqc}/>}
+    {showAdmin&&<RefAdmin referentiel={referentiel} setReferentiel={setReferentiel} onClose={()=>setShowAdmin(false)} eId={aEId} setEId={setAEId} en={aEn} setEn={setAEn} ec={aEc} setEc={setAEc} er={aEr} setEr={setAEr} an={aAn} setAn={setAAn} ac={aAc} setAc={setAAc} ar={aAr} setAr={setAAr}/>}
+    {showSettings&&settingsM()}
+  </div>;
+}
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>
